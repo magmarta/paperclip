@@ -273,6 +273,105 @@ EOF
 chown "root:$SERVICE_USER" /etc/paperclip.env
 chmod 640 /etc/paperclip.env
 
+# ── Yardimci betikler: izin tamiri + model girisi ────────────────
+# Paperclip'in "Connect a model" ekrani operatore host'ta calistirilacak bir
+# kabuk komutu veriyor. O komut root ile calistirilirsa CLI, kimlik dosyalarini
+# root sahipli birakiyor; servis (paperclip kullanicisi) sonra onlari silemiyor
+# ve akis "Internal server error" ile oluyor. Iki betik bunu kalici olarak
+# engelliyor: giris her zaman servis kullanicisi olarak calisir, ve servis her
+# baslayista sahipligi onarir.
+
+cat > /usr/local/bin/paperclip-repair-perms <<REPAIR
+#!/bin/sh
+# Veri dizininde servis kullanicisine ait olmayan ilk dosyayi arar; bulursa
+# tum agaci onarir. Tam eslesen bir agacta maliyeti tek bir metadata taramasi.
+set -e
+DATA_DIR="\${PAPERCLIP_HOME:-$DATA_DIR}"
+SERVICE_USER="$SERVICE_USER"
+[ -d "\$DATA_DIR" ] || exit 0
+if [ -n "\$(find "\$DATA_DIR" \\( ! -user "\$SERVICE_USER" -o ! -group "\$SERVICE_USER" \\) -print -quit 2>/dev/null)" ]; then
+  echo "paperclip-repair-perms: \$DATA_DIR icinde yabanci sahiplik bulundu, onariliyor"
+  chown -R "\$SERVICE_USER:\$SERVICE_USER" "\$DATA_DIR"
+fi
+REPAIR
+chmod 755 /usr/local/bin/paperclip-repair-perms
+
+cat > /usr/local/bin/paperclip-login <<'LOGIN'
+#!/usr/bin/env bash
+# Paperclip model girisini DOGRU kullanici ile calistirir.
+#
+#   paperclip-login            # Claude (varsayilan)
+#   paperclip-login codex      # OpenAI Codex
+#   paperclip-login grok       # Grok
+#
+# Once Paperclip arayuzunde "Connect a model" ekranini acin; bu betik o ekranin
+# olusturdugu en yeni oturum dizinini kullanir.
+set -euo pipefail
+
+ENV_FILE=/etc/paperclip.env
+[ -r "$ENV_FILE" ] || { echo "HATA: $ENV_FILE okunamadi (root olarak calistirin)." >&2; exit 1; }
+get() { grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2-; }
+
+DATA_DIR="$(get PAPERCLIP_HOME)"; DATA_DIR="${DATA_DIR:-/var/lib/paperclip}"
+INSTANCE="$(get PAPERCLIP_INSTANCE_ID)"; INSTANCE="${INSTANCE:-default}"
+SERVICE_USER="$(stat -c %U "$DATA_DIR" 2>/dev/null || echo paperclip)"
+ROOT="$DATA_DIR/instances/$INSTANCE/ai-local-logins"
+
+PROVIDER="${1:-claude}"
+case "$PROVIDER" in
+  claude|anthropic) BIN=claude ;;
+  codex|openai)     BIN=codex ;;
+  grok)             BIN=grok ;;
+  *) echo "Bilinmeyen saglayici: $PROVIDER (claude | codex | grok)" >&2; exit 1 ;;
+esac
+command -v "$BIN" >/dev/null 2>&1 || { echo "HATA: '$BIN' PATH uzerinde yok." >&2; exit 1; }
+
+UUID="$(ls -1t "$ROOT" 2>/dev/null | head -1 || true)"
+if [ -z "$UUID" ]; then
+  echo "HATA: Aktif bir giris oturumu yok." >&2
+  echo "Paperclip arayuzunde once 'Connect a model' ekranini acin, sonra bu komutu tekrar calistirin." >&2
+  exit 1
+fi
+DIR="$ROOT/$UUID"
+echo "Oturum   : $UUID"
+echo "Kullanici: $SERVICE_USER"
+echo "Dizin    : $DIR"
+echo
+
+mkdir -p "$DIR"
+chown -R "$SERVICE_USER:$SERVICE_USER" "$DIR"
+
+# runuser bir TTY'yi korur, boylece cihaz-kodu akisi normal calisir. Kimlik
+# dosyalari dogrudan servis kullanicisi adina olusur.
+set +e
+case "$PROVIDER" in
+  claude|anthropic)
+    runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" CLAUDE_CONFIG_DIR="$DIR" claude auth login ;;
+  codex|openai)
+    runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" CODEX_HOME="$DIR" \
+      codex -c 'cli_auth_credentials_store="file"' login --device-auth ;;
+  grok)
+    runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" GROK_HOME="$DIR" grok login --device-auth ;;
+esac
+status=$?
+set -e
+
+# CLI cikarken root sahipli artik biraktiysa (ornegin elle mudahale), onar.
+chown -R "$SERVICE_USER:$SERVICE_USER" "$DIR"
+
+echo
+if [ -n "$(ls -A "$DIR" 2>/dev/null)" ] && [ "$status" -eq 0 ]; then
+  echo "BASARILI. Kimlik dosyalari olustu:"
+  ls -1A "$DIR" | sed 's/^/  /'
+  echo
+  echo "Paperclip sekmesine donup 'Connect' butonuna basin."
+else
+  echo "Giris tamamlanmadi (cikis kodu $status). Tekrar deneyin."
+  exit 1
+fi
+LOGIN
+chmod 755 /usr/local/bin/paperclip-login
+
 cat > /etc/systemd/system/paperclip.service <<EOF
 [Unit]
 Description=Paperclip AI agent orchestration server
@@ -286,6 +385,10 @@ User=$SERVICE_USER
 Group=$SERVICE_USER
 WorkingDirectory=$APP_DIR
 EnvironmentFile=/etc/paperclip.env
+# Yanlislikla root ile calistirilmis bir CLI, veri dizininde root sahipli dosya
+# birakabiliyor; servis onlari silemeyince model baglama akisi patliyor.
+# Bu, servisi acmadan once sahipligi onarir ("+" = root olarak calistir).
+ExecStartPre=+/usr/local/bin/paperclip-repair-perms
 ExecStart=/usr/local/bin/node --import ./server/node_modules/tsx/dist/loader.mjs server/dist/index.js
 Restart=on-failure
 RestartSec=5
@@ -344,6 +447,12 @@ cat <<EOF
   Hostname    : $PUBLIC_HOST, $(hostname), localhost${ALLOWED_HOSTNAMES:+, $ALLOWED_HOSTNAMES}
   Telemetri   : $([ "$TELEMETRY" = "on" ] && echo "ACIK" || echo "KAPALI")
   Docker      : $(command -v docker >/dev/null 2>&1 && docker --version 2>/dev/null | cut -d, -f1 || echo "kurulu degil")
+
+  Model baglama (Connect a model ekranini actiktan sonra):
+    paperclip-login          # Claude
+    paperclip-login codex    # OpenAI Codex
+    ("claude auth login" komutunu ELLE root ile calistirmayin; dosyalar root
+     sahipli kalir ve baglanti akisi hata verir.)
 
   Servis:
     systemctl status paperclip
