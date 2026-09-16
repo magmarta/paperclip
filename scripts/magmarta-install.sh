@@ -300,12 +300,16 @@ cat > /usr/local/bin/paperclip-login <<'LOGIN'
 #!/usr/bin/env bash
 # Paperclip model girisini DOGRU kullanici ile calistirir.
 #
-#   paperclip-login            # Claude (varsayilan)
-#   paperclip-login codex      # OpenAI Codex
-#   paperclip-login grok       # Grok
+#   paperclip-login                 # etkilesimli (terminal yapistirma calisiyorsa)
+#   paperclip-login --start         # URL'yi bas ve kodu beklemeye gec
+#   paperclip-login --code <KOD>    # kodu ver, girisi tamamla
+#   paperclip-login --cancel        # bekleyen girisi iptal et
 #
-# Once Paperclip arayuzunde "Connect a model" ekranini acin; bu betik o ekranin
-# olusturdugu en yeni oturum dizinini kullanir.
+# Saglayici ikinci arguman olarak verilir: claude (varsayilan) | codex | grok
+#
+# --start/--code ikilisi, kodu CLI'in tam ekran arayuzu yerine normal kabuk
+# satirina yapistirmanizi saglar. Bazi SSH istemcileri TUI'ye yapistirmayi
+# iletmiyor; kabuk satirina yapistirma genelde calisiyor.
 set -euo pipefail
 
 ENV_FILE=/etc/paperclip.env
@@ -316,6 +320,16 @@ DATA_DIR="$(get PAPERCLIP_HOME)"; DATA_DIR="${DATA_DIR:-/var/lib/paperclip}"
 INSTANCE="$(get PAPERCLIP_INSTANCE_ID)"; INSTANCE="${INSTANCE:-default}"
 SERVICE_USER="$(stat -c %U "$DATA_DIR" 2>/dev/null || echo paperclip)"
 ROOT="$DATA_DIR/instances/$INSTANCE/ai-local-logins"
+STATE=/run/paperclip-login
+
+MODE=interactive
+CODE=""
+case "${1:-}" in
+  --start)  MODE=start;  shift ;;
+  --code)   MODE=code; CODE="${2:-}"; shift 2 || true ;;
+  --cancel) MODE=cancel; shift ;;
+  -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+esac
 
 PROVIDER="${1:-claude}"
 case "$PROVIDER" in
@@ -324,49 +338,138 @@ case "$PROVIDER" in
   grok)             BIN=grok ;;
   *) echo "Bilinmeyen saglayici: $PROVIDER (claude | codex | grok)" >&2; exit 1 ;;
 esac
-command -v "$BIN" >/dev/null 2>&1 || { echo "HATA: '$BIN' PATH uzerinde yok." >&2; exit 1; }
 
+cleanup_state() {
+  # setsid ile baslatildiklari icin her biri kendi surec grubunun lideri;
+  # gruba sinyal gondermek alt surecleri de kapatir.
+  for f in pid holder; do
+    [ -f "$STATE/$f" ] || continue
+    kill -- "-$(cat "$STATE/$f")" 2>/dev/null || kill "$(cat "$STATE/$f")" 2>/dev/null || true
+  done
+  rm -rf "$STATE"
+}
+
+if [ "$MODE" = cancel ]; then
+  cleanup_state; echo "Bekleyen giris iptal edildi."; exit 0
+fi
+
+run_as() { runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" "$@"; }
+
+login_cmd() {
+  case "$PROVIDER" in
+    claude|anthropic) run_as CLAUDE_CONFIG_DIR="$DIR" claude auth login ;;
+    codex|openai)     run_as CODEX_HOME="$DIR" codex -c 'cli_auth_credentials_store="file"' login --device-auth ;;
+    grok)             run_as GROK_HOME="$DIR" grok login --device-auth ;;
+  esac
+}
+
+# ── --code: bekleyen girise kodu ilet ───────────────────────────
+if [ "$MODE" = code ]; then
+  [ -p "$STATE/fifo" ] || { echo "HATA: Bekleyen bir giris yok. Once: paperclip-login --start" >&2; exit 1; }
+  [ -n "$CODE" ] || { echo "HATA: Kod bos. Kullanim: paperclip-login --code <KOD>" >&2; exit 1; }
+  DIR="$(cat "$STATE/dir")"
+  printf '%s\n' "$CODE" > "$STATE/fifo"
+  echo "Kod iletildi, sonuc bekleniyor..."
+  for _ in $(seq 1 60); do
+    kill -0 "$(cat "$STATE/pid")" 2>/dev/null || break
+    sleep 1
+  done
+  chown -R "$SERVICE_USER:$SERVICE_USER" "$DIR"
+  echo "--- CLI ciktisi ---"; tail -6 "$STATE/log" 2>/dev/null
+  echo
+  if ls -A "$DIR" 2>/dev/null | grep -q credentials; then
+    echo "BASARILI. Kimlik dosyalari:"; ls -1A "$DIR" | sed 's/^/  /'
+    echo; echo "Paperclip sekmesine donup 'Connect' butonuna basin."
+    cleanup_state
+  else
+    echo "Giris tamamlanmadi. Kodun suresi dolmus olabilir; bastan deneyin:"
+    echo "  paperclip-login --cancel && paperclip-login --start"
+    exit 1
+  fi
+  exit 0
+fi
+
+# ── Oturum dizinini bul (start + interactive) ───────────────────
 UUID="$(ls -1t "$ROOT" 2>/dev/null | head -1 || true)"
 if [ -z "$UUID" ]; then
   echo "HATA: Aktif bir giris oturumu yok." >&2
-  echo "Paperclip arayuzunde once 'Connect a model' ekranini acin, sonra bu komutu tekrar calistirin." >&2
+  echo "Paperclip arayuzunde once 'Connect a model' ekranini acin, sonra tekrar calistirin." >&2
   exit 1
 fi
 DIR="$ROOT/$UUID"
+mkdir -p "$DIR"; chown -R "$SERVICE_USER:$SERVICE_USER" "$DIR"
+command -v "$BIN" >/dev/null 2>&1 || { echo "HATA: '$BIN' PATH uzerinde yok." >&2; exit 1; }
+
 echo "Oturum   : $UUID"
 echo "Kullanici: $SERVICE_USER"
-echo "Dizin    : $DIR"
 echo
 
-mkdir -p "$DIR"
-chown -R "$SERVICE_USER:$SERVICE_USER" "$DIR"
+# ── --start: arka planda baslat, URL'yi bas, kodu bekle ─────────
+if [ "$MODE" = start ]; then
+  cleanup_state
+  mkdir -p "$STATE"; chown "$SERVICE_USER:$SERVICE_USER" "$STATE"; chmod 755 "$STATE"
+  mkfifo -m 600 "$STATE/fifo"; chown "$SERVICE_USER:$SERVICE_USER" "$STATE/fifo"
+  : > "$STATE/log"; chown "$SERVICE_USER:$SERVICE_USER" "$STATE/log"
+  printf '%s' "$DIR" > "$STATE/dir"
 
-# runuser bir TTY'yi korur, boylece cihaz-kodu akisi normal calisir. Kimlik
-# dosyalari dogrudan servis kullanicisi adina olusur.
+  # Her ikisi de setsid ile baslatilir: SSH oturumu kapandiginda SIGHUP ile
+  # olmezler. Tum fd'ler yonlendirilir, boylece "ssh ... --start" komutu
+  # arka plandaki sureci bekleyip asili kalmaz.
+  #
+  # FIFO'yu acik tutan yazar, CLI'in open() cagrisinin beklememesi ve kod
+  # gelene kadar okuma ucunun EOF gormemesi icin gerekli.
+  setsid bash -c 'exec 9>"$1"; sleep 3600' _ "$STATE/fifo" </dev/null >/dev/null 2>&1 &
+  echo $! > "$STATE/holder"
+
+  case "$PROVIDER" in
+    claude|anthropic)
+      setsid runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" CLAUDE_CONFIG_DIR="$DIR" \
+        claude auth login < "$STATE/fifo" > "$STATE/log" 2>&1 & ;;
+    codex|openai)
+      setsid runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" CODEX_HOME="$DIR" \
+        codex -c 'cli_auth_credentials_store="file"' login --device-auth < "$STATE/fifo" > "$STATE/log" 2>&1 & ;;
+    grok)
+      setsid runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" GROK_HOME="$DIR" \
+        grok login --device-auth < "$STATE/fifo" > "$STATE/log" 2>&1 & ;;
+  esac
+  echo $! > "$STATE/pid"
+
+  for _ in $(seq 1 40); do
+    grep -qE 'https?://' "$STATE/log" && break
+    sleep 1
+  done
+  URL="$(grep -oE 'https?://[^ ]+' "$STATE/log" | head -1 || true)"
+  if [ -z "$URL" ]; then
+    echo "HATA: CLI bir URL basmadi. Ciktisi:" >&2; cat "$STATE/log" >&2; cleanup_state; exit 1
+  fi
+  cat <<MSG
+1) Su adresi tarayicinizda acin ve yetkilendirin:
+
+$URL
+
+2) Donen kodu kopyalayin ve BU kabuk satirina yapistirip calistirin:
+
+   paperclip-login --code <KOD>
+
+Vazgecmek icin: paperclip-login --cancel
+MSG
+  exit 0
+fi
+
+# ── Etkilesimli mod ─────────────────────────────────────────────
 set +e
-case "$PROVIDER" in
-  claude|anthropic)
-    runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" CLAUDE_CONFIG_DIR="$DIR" claude auth login ;;
-  codex|openai)
-    runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" CODEX_HOME="$DIR" \
-      codex -c 'cli_auth_credentials_store="file"' login --device-auth ;;
-  grok)
-    runuser -u "$SERVICE_USER" -- env HOME="$DATA_DIR" GROK_HOME="$DIR" grok login --device-auth ;;
-esac
+login_cmd
 status=$?
 set -e
-
-# CLI cikarken root sahipli artik biraktiysa (ornegin elle mudahale), onar.
 chown -R "$SERVICE_USER:$SERVICE_USER" "$DIR"
-
 echo
-if [ -n "$(ls -A "$DIR" 2>/dev/null)" ] && [ "$status" -eq 0 ]; then
-  echo "BASARILI. Kimlik dosyalari olustu:"
-  ls -1A "$DIR" | sed 's/^/  /'
-  echo
-  echo "Paperclip sekmesine donup 'Connect' butonuna basin."
+if [ "$status" -eq 0 ] && ls -A "$DIR" 2>/dev/null | grep -q credentials; then
+  echo "BASARILI. Kimlik dosyalari:"; ls -1A "$DIR" | sed 's/^/  /'
+  echo; echo "Paperclip sekmesine donup 'Connect' butonuna basin."
 else
-  echo "Giris tamamlanmadi (cikis kodu $status). Tekrar deneyin."
+  echo "Giris tamamlanmadi (cikis kodu $status)."
+  echo "Terminaliniz yapistirmaya izin vermiyorsa iki adimli modu deneyin:"
+  echo "  paperclip-login --start"
   exit 1
 fi
 LOGIN
