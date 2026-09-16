@@ -345,7 +345,13 @@ cat <<EOF
   Guncelleme:
     bash $0 --update
 
-  Fork'u upstream ile senkronlama (once GitHub'da veya yerelde):
-    gh repo sync magmarta/paperclip --source paperclipai/paperclip
+  Fork'u upstream ile senkronlama:
+    Gunluk otomatik — .github/workflows/sync-upstream.yml (03:00 UTC).
+    Elle tetikleme:  gh workflow run sync-upstream.yml -R magmarta/paperclip
+    ("gh repo sync" KULLANMA: fork kendi gizlilik commit'lerini tasiyor,
+     fast-forward reddedilir, --force ise o commit'leri siler.)
+
+  Gizlilik: (a) telemetri (b) feedback trace (c) duyuru akisi (d) Sentry
+  (e) Paperclip Cloud — depoda kalici kapali. Bkz. .github/FORK-POLICY.md
 
 EOF
