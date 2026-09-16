@@ -13,6 +13,8 @@ place, so merges from `paperclipai/paperclip` stay small and reviewable. For
 stops narrowing types in unreachable code, and the leftover statements failed
 to compile.
 
+Operational setup, update and troubleshooting live in [`KURULUM.md`](../KURULUM.md).
+
 ## Disabled paths
 
 | | Path | Upstream destination | Where it is disabled |
