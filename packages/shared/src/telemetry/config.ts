@@ -68,6 +68,12 @@ export function resolveTelemetryConfig(
 ): TelemetryConfig {
   const caps = resolveCaps(fileConfig);
 
+  // magmarta fork policy (a): first-party telemetry is permanently disabled.
+  // No env var, config file or operator default can re-enable it. Covers both
+  // the server and the CLI, which share this resolver.
+  // See .github/FORK-POLICY.md. The upstream logic below is intentionally dead.
+  return { enabled: false, ...caps };
+
   if (process.env.PAPERCLIP_TELEMETRY_DISABLED === "1") {
     return { enabled: false, ...caps };
   }

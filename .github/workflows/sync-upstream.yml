@@ -1,0 +1,191 @@
+name: Sync upstream
+
+# Keeps this fork current with paperclipai/paperclip without losing the
+# privacy patches described in .github/FORK-POLICY.md.
+#
+# A merge is used rather than a fast-forward: this fork carries its own
+# commits, so `gh repo sync` would refuse and `gh repo sync --force` would
+# discard them. When upstream edits one of the patched functions the merge
+# conflicts on purpose — the workflow stops and opens an issue for review.
+#
+# Pushing merges that touch .github/workflows/** requires a token with the
+# `workflow` scope. The built-in GITHUB_TOKEN does not have it, so add a
+# fine-grained or classic PAT as the `SYNC_PAT` repository secret. Without it
+# the sync still runs and reports what it could not push.
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # her gun 03:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  UPSTREAM_REPO: https://github.com/paperclipai/paperclip.git
+  UPSTREAM_BRANCH: master
+  TARGET_BRANCH: master
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: true
+          token: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_REPO" 2>/dev/null || \
+            git remote set-url upstream "$UPSTREAM_REPO"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+
+      - name: Report divergence
+        id: divergence
+        run: |
+          behind=$(git rev-list --count "HEAD..upstream/$UPSTREAM_BRANCH")
+          ahead=$(git rev-list --count "upstream/$UPSTREAM_BRANCH..HEAD")
+          echo "behind=$behind" >> "$GITHUB_OUTPUT"
+          echo "Fork is $behind commit(s) behind and $ahead commit(s) ahead of upstream."
+          if [ "$behind" -eq 0 ]; then
+            echo "Already up to date with upstream." >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "Merging $behind upstream commit(s):"
+              echo
+              git log --oneline "HEAD..upstream/$UPSTREAM_BRANCH" | head -50
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Merge upstream
+        id: merge
+        if: steps.divergence.outputs.behind != '0'
+        run: |
+          set +e
+          git merge --no-edit --no-ff "upstream/$UPSTREAM_BRANCH"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "conflicts<<CONFLICTS_EOF"
+              git diff --name-only --diff-filter=U
+              echo "CONFLICTS_EOF"
+            } >> "$GITHUB_OUTPUT"
+            git merge --abort || true
+            echo "merged=conflict" >> "$GITHUB_OUTPUT"
+          else
+            echo "merged=ok" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify fork policy patches survived
+        if: steps.merge.outputs.merged == 'ok'
+        run: |
+          # Fail loudly if the merge silently dropped a privacy patch.
+          missing=0
+          check() {
+            if ! grep -q "magmarta fork policy ($1)" "$2"; then
+              echo "::error file=$2::fork policy ($1) patch is missing from $2"
+              missing=1
+            fi
+          }
+          check a packages/shared/src/telemetry/config.ts
+          check a server/src/config.ts
+          check b server/src/index.ts
+          check b server/src/services/feedback-share-client.ts
+          check c server/src/config.ts
+          check d server/src/sentry-dsn.ts
+          check e server/src/services/paperclip-cloud-connector.ts
+          [ "$missing" -eq 0 ] || exit 1
+
+      - name: Push
+        id: push
+        if: steps.merge.outputs.merged == 'ok'
+        run: |
+          set +e
+          push_output=$(git push origin "HEAD:$TARGET_BRANCH" 2>&1)
+          status=$?
+          set -e
+          echo "$push_output"
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "error<<PUSH_EOF"
+              echo "$push_output"
+              echo "PUSH_EOF"
+            } >> "$GITHUB_OUTPUT"
+            echo "pushed=failed" >> "$GITHUB_OUTPUT"
+          else
+            echo "pushed=ok" >> "$GITHUB_OUTPUT"
+            echo "Merged and pushed upstream changes." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Open issue on conflict
+        if: steps.merge.outputs.merged == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
+          CONFLICTS: ${{ steps.merge.outputs.conflicts }}
+        run: |
+          title="Upstream sync conflict $(date -u +%Y-%m-%d)"
+          if [ -n "$(gh issue list --state open --search "$title in:title" --json number --jq '.[].number')" ]; then
+            echo "An issue for today is already open."
+            exit 1
+          fi
+          {
+            echo "The daily upstream sync could not merge \`paperclipai/paperclip@$UPSTREAM_BRANCH\` cleanly."
+            echo
+            echo "Conflicting files:"
+            echo
+            echo '```'
+            echo "$CONFLICTS"
+            echo '```'
+            echo
+            echo "This is usually upstream editing one of the functions patched by"
+            echo "\`.github/FORK-POLICY.md\`."
+            echo
+            echo "Resolve locally:"
+            echo
+            echo '```sh'
+            echo "git fetch upstream $UPSTREAM_BRANCH"
+            echo "git merge upstream/$UPSTREAM_BRANCH"
+            echo '# keep the "magmarta fork policy" early return at the top of each patched function'
+            echo "git push origin $TARGET_BRANCH"
+            echo '```'
+            echo
+            echo "Then redeploy: \`bash /root/install-paperclip.sh --update\`"
+          } > issue-body.md
+          gh issue create --title "$title" --body-file issue-body.md
+          exit 1
+
+      - name: Open issue when push is rejected
+        if: steps.push.outputs.pushed == 'failed'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
+          PUSH_ERROR: ${{ steps.push.outputs.error }}
+        run: |
+          {
+            echo "The merge succeeded but the push was rejected:"
+            echo
+            echo '```'
+            echo "$PUSH_ERROR"
+            echo '```'
+            echo
+            echo "If the message mentions workflow files, this run used the built-in"
+            echo "\`GITHUB_TOKEN\`, which may not update \`.github/workflows/**\`. Add a PAT"
+            echo "with \`repo\` + \`workflow\` scope as the \`SYNC_PAT\` repository secret and"
+            echo "re-run this workflow."
+          } > push-issue-body.md
+          gh issue create --title "Upstream sync could not push $(date -u +%Y-%m-%d)" --body-file push-issue-body.md
+          exit 1

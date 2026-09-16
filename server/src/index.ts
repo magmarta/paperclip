@@ -794,7 +794,9 @@ async function startServerWithDatabaseTeardown(
   const uiMode = config.uiDevMiddleware ? "vite-dev" : config.serveUi ? "static" : "none";
   const storageService = createStorageServiceFromConfig(config);
   const feedback = feedbackService(db as any, {
-    shareClient: createFeedbackTraceShareClientFromConfig(config),
+    // magmarta fork policy (b): no share client is wired up, so feedback traces
+    // stay local and are never queued for upload. See .github/FORK-POLICY.md.
+    shareClient: undefined,
   });
   const backupSettingsSvc = instanceSettingsService(db);
   const databaseBackupMaxAgeHours = Math.max(

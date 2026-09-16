@@ -18,42 +18,16 @@ export interface FeedbackTraceShareClient {
 export function createFeedbackTraceShareClientFromConfig(
   config: Pick<Config, "feedbackExportBackendUrl" | "feedbackExportBackendToken">,
 ): FeedbackTraceShareClient {
-  const baseUrl = config.feedbackExportBackendUrl?.trim() || DEFAULT_FEEDBACK_EXPORT_BACKEND_URL;
-  const token = config.feedbackExportBackendToken?.trim();
-  const endpoint = new URL("/feedback-traces", baseUrl).toString();
-
+  // magmarta fork policy (b): feedback trace bundles carry real work content,
+  // so the upload implementation is removed outright rather than gated behind a
+  // flag. `server/src/index.ts` also wires no share client at all, which keeps
+  // pending traces local instead of queueing them. See .github/FORK-POLICY.md.
+  void config;
   return {
-    async uploadTraceBundle(bundle) {
-      const exportedAt = new Date();
-      const objectKey = buildFeedbackShareObjectKey(bundle, exportedAt);
-      const requestBody = JSON.stringify({
-        objectKey,
-        exportedAt: exportedAt.toISOString(),
-        bundle,
-      });
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          encoding: "gzip+base64+json",
-          payload: gzipSync(requestBody).toString("base64"),
-        }),
-      });
-
-      if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(detail.trim() || `Feedback trace upload failed with HTTP ${response.status}`);
-      }
-
-      const payload = await response.json().catch(() => null) as { objectKey?: unknown } | null;
-      return {
-        objectKey: typeof payload?.objectKey === "string" && payload.objectKey.trim().length > 0
-          ? payload.objectKey
-          : objectKey,
-      };
+    async uploadTraceBundle(): Promise<{ objectKey: string }> {
+      throw new Error(
+        "Feedback trace sharing is disabled by fork policy (.github/FORK-POLICY.md)",
+      );
     },
   };
 }

@@ -144,67 +144,12 @@ export class PaperclipCloudConnectorError extends Error {
 export function paperclipCloudConnectorConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): PaperclipCloudConnectorConfig | null {
-  const localIdentity = loadPaperclipCloudConnectorIdentity();
-  const legacyConfigured = [
-    env.PAPERCLIP_ID_CONNECTOR_INSTANCE_ID,
-    env.PAPERCLIP_ID_CONNECTOR_SIGN_PRIVATE_KEY,
-    env.PAPERCLIP_ID_CONNECTOR_SEAL_PRIVATE_KEY,
-    env.PAPERCLIP_ID_CONNECTOR_ENVIRONMENT,
-    env.PAPERCLIP_ID_CONNECTOR_BASE_URL,
-  ].some((value) => Boolean(value?.trim()));
-  const managedInstanceId = env.PAPERCLIP_CLOUD_CONNECTOR_INSTANCE_ID?.trim();
-  const managedSignPrivateKey = env.PAPERCLIP_CLOUD_CONNECTOR_SIGN_PRIVATE_KEY?.trim();
-  const managedSealPrivateKey = env.PAPERCLIP_CLOUD_CONNECTOR_SEAL_PRIVATE_KEY?.trim();
-  const managedEnvironment = env.PAPERCLIP_CLOUD_CONNECTOR_ENVIRONMENT?.trim();
-  const hasManagedIdentityOverride = [managedInstanceId, managedSignPrivateKey, managedSealPrivateKey]
-    .some(Boolean);
-  const localStatus = hasManagedIdentityOverride ? null : paperclipCloudConnectorEnrollmentStatus(env);
-  const hasActiveLocalIdentity = localIdentity?.status === "active" && localStatus?.configured === true;
-  if (!hasManagedIdentityOverride && !hasActiveLocalIdentity && legacyConfigured) {
-    throw new PaperclipCloudConnectorError(
-      "Paperclip ID connector settings use an incompatible legacy protocol; enroll this instance with Paperclip Cloud",
-      "CONNECTOR_MIGRATION_REQUIRED",
-    );
-  }
-  if (!hasManagedIdentityOverride && !hasActiveLocalIdentity) return null;
-
-  const instanceId = hasManagedIdentityOverride ? managedInstanceId : localIdentity!.instanceId;
-  const signPrivateKey = hasManagedIdentityOverride ? managedSignPrivateKey : localIdentity!.signPrivateKey;
-  const sealPrivateKey = hasManagedIdentityOverride ? managedSealPrivateKey : localIdentity!.sealPrivateKey;
-  const environment = hasManagedIdentityOverride ? managedEnvironment : localIdentity!.environment;
-  const baseUrl = env.PAPERCLIP_CLOUD_CONNECTOR_BASE_URL?.trim()
-    || (hasActiveLocalIdentity ? localIdentity!.brokerBaseUrl : undefined)
-    || "https://my.paperclip.app";
-  const values = [instanceId, signPrivateKey, sealPrivateKey, environment];
-  if (values.some((value) => !value)) {
-    throw new PaperclipCloudConnectorError("Paperclip Cloud connector configuration is incomplete", "CONNECTOR_CONFIG_INCOMPLETE");
-  }
-  if (environment !== "development" && environment !== "staging" && environment !== "production") {
-    throw new PaperclipCloudConnectorError("Paperclip Cloud connector environment is invalid", "CONNECTOR_CONFIG_INVALID");
-  }
-  const parsedBaseUrl = new URL(baseUrl);
-  if (parsedBaseUrl.protocol !== "https:" && !(parsedBaseUrl.protocol === "http:" && isLoopback(parsedBaseUrl.hostname))) {
-    throw new PaperclipCloudConnectorError("Paperclip Cloud connector URL must use HTTPS", "CONNECTOR_CONFIG_INVALID");
-  }
-  if (parsedBaseUrl.username || parsedBaseUrl.password || parsedBaseUrl.search || parsedBaseUrl.hash) {
-    throw new PaperclipCloudConnectorError("Paperclip Cloud connector URL is invalid", "CONNECTOR_CONFIG_INVALID");
-  }
-  const brokerHost = parsedBaseUrl.hostname.toLowerCase();
-  if ((brokerHost === "my.paperclip.app" && environment !== "production")
-    || (brokerHost === "my-staging.paperclip.app" && environment !== "staging")) {
-    throw new PaperclipCloudConnectorError(
-      "Paperclip Cloud connector broker and environment do not match",
-      "CONNECTOR_CONFIG_INVALID",
-    );
-  }
-  parsedBaseUrl.pathname = parsedBaseUrl.pathname.replace(/\/$/, "");
-  return {
-    baseUrl: parsedBaseUrl.toString().replace(/\/$/, ""),
-    instanceId: instanceId!,
-    environment,
-    signPrivateKey: signPrivateKey!,
-    sealPrivateKey: sealPrivateKey!,
-  };
+  // magmarta fork policy (e): the Paperclip Cloud broker (my.paperclip.app)
+  // is permanently unreachable from this fork. Every caller gates connector
+  // creation on this returning a config, so null disables the whole path.
+  // See .github/FORK-POLICY.md.
+  void env;
+  return null;
 }
 
 export function createPaperclipCloudConnector(input: {

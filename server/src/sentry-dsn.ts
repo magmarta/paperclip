@@ -20,6 +20,11 @@ function normalize(value: string | undefined): string | null {
 }
 
 export function resolveSentryDsns(env: NodeJS.ProcessEnv = process.env): SentryDsns {
+  // magmarta fork policy (d): Sentry error reporting is permanently off, so
+  // no stack traces or breadcrumbs leave the instance even if SENTRY_DSN is
+  // set in the environment. See .github/FORK-POLICY.md.
+  void env;
+  return { frontend: null, backend: null, legacyFallbackUsed: false };
   const legacy = normalize(env.SENTRY_DSN);
   const specificFrontend = normalize(env.SENTRY_DSN_FRONTEND);
   const specificBackend = normalize(env.SENTRY_DSN_BACKEND);
