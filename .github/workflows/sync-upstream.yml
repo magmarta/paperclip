@@ -144,7 +144,7 @@ jobs:
           CONFLICTS: ${{ steps.merge.outputs.conflicts }}
         run: |
           title="Upstream sync conflict $(date -u +%Y-%m-%d)"
-          if [ -n "$(gh issue list --state open --search "$title in:title" --json number --jq '.[].number')" ]; then
+          if [ -n "$(gh issue list --state open --search "$title in:title" --json number --jq '.[].number' 2>/dev/null)" ]; then
             echo "An issue for today is already open."
             exit 1
           fi
@@ -171,7 +171,12 @@ jobs:
             echo
             echo "Then redeploy: \`bash /root/install-paperclip.sh --update\`"
           } > issue-body.md
-          gh issue create --title "$title" --body-file issue-body.md
+          # The job summary is the reliable channel: this repository may have
+          # Issues disabled, in which case `gh issue create` fails. Either way
+          # the step exits non-zero so the run is visibly red.
+          cat issue-body.md >> "$GITHUB_STEP_SUMMARY"
+          gh issue create --title "$title" --body-file issue-body.md \
+            || echo "::warning::Could not open an issue (are Issues disabled?). Details are in the job summary."
           exit 1
 
       - name: Open issue when push is rejected
@@ -192,5 +197,7 @@ jobs:
             echo "with \`repo\` + \`workflow\` scope as the \`SYNC_PAT\` repository secret and"
             echo "re-run this workflow."
           } > push-issue-body.md
-          gh issue create --title "Upstream sync could not push $(date -u +%Y-%m-%d)" --body-file push-issue-body.md
+          cat push-issue-body.md >> "$GITHUB_STEP_SUMMARY"
+          gh issue create --title "Upstream sync could not push $(date -u +%Y-%m-%d)" --body-file push-issue-body.md \
+            || echo "::warning::Could not open an issue (are Issues disabled?). Details are in the job summary."
           exit 1
