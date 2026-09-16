@@ -31,6 +31,10 @@ DEPLOYMENT_EXPOSURE="${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}" # private | publ
 TELEMETRY="${PAPERCLIP_TELEMETRY:-off}"     # off | on  (bkz. GIZLILIK notu asagida)
 INSTALL_AGENT_CLIS="${PAPERCLIP_INSTALL_AGENT_CLIS:-1}"
 INSTALL_DOCKER="${PAPERCLIP_INSTALL_DOCKER:-1}"   # ajan izolasyonu / sandbox saglayicilari icin
+# Kurum ic DNS alan adlari. "*.suffix" o suffix'in tum alt alan adlarini kabul
+# eder (apex haric). Fork yamasi (f) bunu hem hostname guard'inda hem de
+# Better Auth trustedOrigins tarafinda calistirir.
+ALLOWED_HOSTNAMES="${PAPERCLIP_ALLOWED_HOSTNAMES:-*.c-prot.local,*.marta.tr}"
 UPDATE_ONLY="${PAPERCLIP_UPDATE_ONLY:-0}"
 
 RUSTUP_VERSION=1.29.0
@@ -51,6 +55,8 @@ Kullanim: install-paperclip.sh [secenekler]
   --telemetry on|off   Birinci-taraf telemetri (varsayilan: off)
   --no-agent-clis      claude/codex/gemini/opencode/kimi CLI'larini kurma
   --no-docker          Docker Engine kurma (varsayilan: kurulur)
+  --allowed-hostnames L Virgullu ek hostname listesi; "*.ornek.local" wildcard
+                       kabul eder (varsayilan: *.c-prot.local,*.marta.tr)
   --update             Sadece guncelle: git pull + yeniden derle + servisi yeniden baslat
   -h, --help           Bu yardim
 
@@ -73,6 +79,7 @@ while [ $# -gt 0 ]; do
     --telemetry) TELEMETRY="$2"; shift 2 ;;
     --no-agent-clis) INSTALL_AGENT_CLIS=0; shift ;;
     --no-docker) INSTALL_DOCKER=0; shift ;;
+    --allowed-hostnames) ALLOWED_HOSTNAMES="$2"; shift 2 ;;
     --update) UPDATE_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Bilinmeyen secenek: $1" >&2; usage; exit 1 ;;
@@ -247,7 +254,7 @@ PAPERCLIP_CONFIG=$DATA_DIR/instances/default/config.json
 PAPERCLIP_DEPLOYMENT_MODE=$DEPLOYMENT_MODE
 PAPERCLIP_DEPLOYMENT_EXPOSURE=$DEPLOYMENT_EXPOSURE
 PAPERCLIP_PUBLIC_URL=$PUBLIC_URL
-PAPERCLIP_ALLOWED_HOSTNAMES=$PUBLIC_HOST,$(hostname),localhost,127.0.0.1
+PAPERCLIP_ALLOWED_HOSTNAMES=$PUBLIC_HOST,$(hostname),localhost,127.0.0.1${ALLOWED_HOSTNAMES:+,$ALLOWED_HOSTNAMES}
 BETTER_AUTH_SECRET=$AUTH_SECRET
 PAPERCLIP_TOOL_ACTION_SIGNING_SECRET=$SIGN_SECRET
 OPENCODE_ALLOW_ALL_MODELS=true
@@ -334,6 +341,7 @@ cat <<EOF
   Uygulama    : $APP_DIR  ($(git -C "$APP_DIR" rev-parse --short HEAD))
   Veri        : $DATA_DIR  (gomulu PostgreSQL burada)
   Ortam       : /etc/paperclip.env
+  Hostname    : $PUBLIC_HOST, $(hostname), localhost${ALLOWED_HOSTNAMES:+, $ALLOWED_HOSTNAMES}
   Telemetri   : $([ "$TELEMETRY" = "on" ] && echo "ACIK" || echo "KAPALI")
   Docker      : $(command -v docker >/dev/null 2>&1 && docker --version 2>/dev/null | cut -d, -f1 || echo "kurulu degil")
 

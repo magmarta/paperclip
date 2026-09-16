@@ -23,6 +23,12 @@ to compile.
 | **d** | Sentry error reporting | Sentry ingest for the configured DSN | `server/src/sentry-dsn.ts` (`resolveSentryDsns`) |
 | **e** | Paperclip Cloud connector | `my.paperclip.app` | `server/src/services/paperclip-cloud-connector.ts` (`paperclipCloudConnectorConfigFromEnv`) |
 
+One patch is not a privacy change but an operability one:
+
+| | Change | Where |
+|---|---|---|
+| **f** | `*.suffix` wildcards in `PAPERCLIP_ALLOWED_HOSTNAMES` | `server/src/middleware/private-hostname-guard.ts` |
+
 Notes on each:
 
 - **(a)** Upstream telemetry defaults to **on** (opt-out). The payload is a
@@ -41,6 +47,28 @@ Notes on each:
   it on.
 - **(e)** Already inert unless the instance is enrolled with Paperclip Cloud.
   Forced off so enrollment cannot happen by accident.
+
+### (f) Wildcard hostnames
+
+Upstream requires every hostname to be listed exactly. Internal DNS here hands
+out a name per site, so each new host meant editing an allow-list that nobody
+remembered to edit — and the failure mode is a bare `403 This hostname is not
+allowed`, which reads like an outage.
+
+A `*.suffix` entry now admits subdomains of that suffix. The match compares the
+leading dot as part of the suffix, so `*.c-prot.local` accepts
+`a.b.c-prot.local` but rejects both the apex `c-prot.local` and a lookalike
+such as `evil-c-prot.local`. Add the apex explicitly if you need it.
+
+Better Auth already supports the same pattern in `trustedOrigins`, so
+`deriveAuthTrustedOrigins` needed no change — it emits
+`http(s)://*.c-prot.local[:port]` from the same list.
+
+This does weaken a defence: the guard exists to blunt DNS-rebinding, and any
+name under a wildcarded suffix now reaches the instance. It is a deliberate
+trade for a private network whose DNS the operator controls. Pass
+`--allowed-hostnames` to `scripts/magmarta-install.sh` to narrow or replace the
+defaults (`*.c-prot.local,*.marta.tr`).
 
 ## What is deliberately **not** disabled
 

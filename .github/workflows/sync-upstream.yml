@@ -114,6 +114,7 @@ jobs:
           check c server/src/config.ts
           check d server/src/sentry-dsn.ts
           check e server/src/services/paperclip-cloud-connector.ts
+          check f server/src/middleware/private-hostname-guard.ts
           [ "$missing" -eq 0 ] || exit 1
 
       - name: Push

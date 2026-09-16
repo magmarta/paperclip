@@ -28,6 +28,30 @@ function normalizeAllowedHostnames(values: string[]): string[] {
   return Array.from(unique);
 }
 
+// magmarta fork policy (f): a `*.suffix` entry in PAPERCLIP_ALLOWED_HOSTNAMES
+// admits every subdomain of that suffix. Internal DNS here hands out a name per
+// site (esra.kaydu.c-prot.local, ...), and re-enumerating them on every host was
+// the step operators actually got wrong.
+//
+// The match is deliberately narrow. `*.c-prot.local` accepts `a.c-prot.local`
+// and `a.b.c-prot.local`, but not the apex `c-prot.local` (add it explicitly)
+// and not `evil-c-prot.local` — the leading dot is part of the compared suffix,
+// so a suffix cannot be smuggled in as the tail of a longer label.
+//
+// Better Auth already understands the same pattern in `trustedOrigins`, so
+// `deriveAuthTrustedOrigins` needs no matching change: it emits
+// `http(s)://*.c-prot.local[:port]`, which Better Auth matches as a wildcard.
+// See .github/FORK-POLICY.md.
+function matchesWildcardHostname(hostname: string, allowSet: Set<string>): boolean {
+  for (const entry of allowSet) {
+    if (!entry.startsWith("*.")) continue;
+    const suffix = entry.slice(1);
+    if (suffix.length <= 1) continue;
+    if (hostname.length > suffix.length && hostname.endsWith(suffix)) return true;
+  }
+  return false;
+}
+
 export function resolvePrivateHostnameAllowSet(opts: { allowedHostnames: string[]; bindHost: string }): Set<string> {
   const configuredAllow = normalizeAllowedHostnames(opts.allowedHostnames);
   const bindHost = opts.bindHost.trim().toLowerCase();
@@ -81,7 +105,11 @@ export function privateHostnameGuard(opts: {
       return;
     }
 
-    if (isLoopbackHostname(hostname) || allowSet.has(hostname)) {
+    if (
+      isLoopbackHostname(hostname)
+      || allowSet.has(hostname)
+      || matchesWildcardHostname(hostname, allowSet)
+    ) {
       next();
       return;
     }
