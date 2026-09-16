@@ -17,9 +17,14 @@ on:
   schedule:
     - cron: "0 3 * * *" # her gun 03:00 UTC
   workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch to sync. Point this at a scratch branch to exercise the merge and push path without touching master."
+        required: false
+        default: master
 
 concurrency:
-  group: sync-upstream
+  group: sync-upstream-${{ github.event.inputs.target_branch || 'master' }}
   cancel-in-progress: false
 
 permissions:
@@ -29,7 +34,7 @@ permissions:
 env:
   UPSTREAM_REPO: https://github.com/paperclipai/paperclip.git
   UPSTREAM_BRANCH: master
-  TARGET_BRANCH: master
+  TARGET_BRANCH: ${{ github.event.inputs.target_branch || 'master' }}
 
 jobs:
   sync:
@@ -38,7 +43,7 @@ jobs:
       - name: Check out fork
         uses: actions/checkout@v4
         with:
-          ref: master
+          ref: ${{ github.event.inputs.target_branch || 'master' }}
           fetch-depth: 0
           persist-credentials: true
           token: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
