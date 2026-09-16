@@ -115,6 +115,12 @@ jobs:
           check d server/src/sentry-dsn.ts
           check e server/src/services/paperclip-cloud-connector.ts
           check f server/src/middleware/private-hostname-guard.ts
+          # (g) lives mostly in fork-only files, which a merge cannot drop.
+          # These are the upstream files it hooks into.
+          check g server/src/routes/ai-connections.ts
+          check g ui/src/api/ai-connections.ts
+          check g ui/src/components/ai-connections/useLocalAiLogin.ts
+          check g ui/src/components/AdapterLoginChrome.tsx
           [ "$missing" -eq 0 ] || exit 1
 
       - name: Push

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Copy, Check, Loader2 } from "lucide-react";
+// magmarta fork policy (g)
+import { BrowserSignIn } from "./ai-connections/BrowserSignIn";
 
 import { Button } from "./ui/button";
 import { copyTextToClipboard } from "../lib/clipboard";
@@ -469,7 +471,18 @@ export function ProviderApiKeyCard({
 /** Shared instructions for local subscription setup in every authentication host. */
 export function LocalProviderLoginInstructions({ adapterType, login }: {
   adapterType: string;
-  login?: { isolated?: boolean; command?: string; preparing: boolean; status?: "ready" | "sign_in_required" | "expired" | null; error: string | null; retry: () => void };
+  login?: {
+    isolated?: boolean;
+    command?: string;
+    preparing: boolean;
+    status?: "ready" | "sign_in_required" | "expired" | null;
+    error: string | null;
+    retry: () => void;
+    // magmarta fork policy (g): present when the caller spreads useLocalAiLogin().
+    sessionId?: string;
+    companyId?: string | null;
+    intent?: Parameters<typeof BrowserSignIn>[0]["intent"];
+  };
 }) {
   const [showCommand, setShowCommand] = useState(false);
   const provider = adapterType === "claude_local" ? "Claude Code" : adapterType === "grok_local" ? "Grok CLI" : "Codex CLI";
@@ -483,7 +496,15 @@ export function LocalProviderLoginInstructions({ adapterType, login }: {
       {!showCommand && <button type="button" className="underline underline-offset-4" onClick={() => setShowCommand(true)}>Use a different account</button>}
     </> : <p>{isolated ? `Sign in to ${provider} for this connection on the machine running Paperclip. Your existing terminal login stays separate.` : `Connect uses your local ${provider} account on the machine running Paperclip.`}</p>}
     {(!ready || showCommand) && !login?.error && <>
-      <p>Run this in a terminal on that machine and finish signing in in your browser. We’ll check automatically when you return.</p>
+      {/* magmarta fork policy (g): browser-driven sign-in first; the terminal
+          command stays below for anyone who prefers it. */}
+      {isolated && login?.intent && <BrowserSignIn
+        companyId={login.companyId ?? null}
+        sessionId={login.sessionId}
+        intent={login.intent}
+        providerName={provider}
+      />}
+      <p>Or run this in a terminal on that machine and finish signing in in your browser. We’ll check automatically when you return.</p>
       {command && <div className="flex min-w-0 max-w-full items-start gap-2 rounded-md border bg-muted p-3 text-foreground">
         <pre className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-xs"><code>{command}</code></pre>
         <LoginCardCopyButton value={command} label="Copy sign-in command" />

@@ -79,6 +79,11 @@ export function useLocalAiLogin(companyId: string | null, intent: AiConnectionLo
   return {
     isolated,
     command: attempt?.command,
+    // magmarta fork policy (g): the browser sign-in panel needs these. Callers
+    // already spread this object, so no call site changes.
+    sessionId: attempt?.sessionId,
+    companyId,
+    intent,
     status,
     preparing: active && !status && !error,
     error,

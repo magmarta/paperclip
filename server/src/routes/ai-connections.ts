@@ -1,6 +1,8 @@
 import { supportsLocalAiLogin } from "../services/local-ai-login-policy.js";
 import { readVerifiedLocalAiCredential } from "../services/local-ai-credentials.js";
 import { localAiLoginService } from "../services/local-ai-login.js";
+// magmarta fork policy (g)
+import { beginBrowserLogin, submitBrowserLoginCode, cancelBrowserLogin, browserLoginCodeSchema } from "../services/browser-ai-login.js";
 import { z } from "zod";
 import { Router, type Request } from "express";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -198,10 +200,42 @@ export function aiConnectionRoutes(db: Db, options: Parameters<typeof supportsLo
     res.setHeader("Cache-Control", "no-store");
     res.json(await localLogin.check(companyId, userId, intent, localSessionId));
   });
+  // magmarta fork policy (g): browser-driven sign-in for the same attempt.
+  // Both routes reuse the local-attempt authorization above; they only add a
+  // way to drive the provider CLI from the UI instead of a terminal on the
+  // host. See .github/FORK-POLICY.md.
+  router.post("/companies/:companyId/ai-connections/local/attempts/:sessionId/spawn",
+    validate(localAiConnectionSchema), async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const sessionId = z.string().uuid().parse(req.params.sessionId);
+      const { localSessionId: _ignored, ...intent } = localAiConnectionSchema.parse(req.body);
+      assertLocalLoginAvailable();
+      const userId = await assertAiConnectionCreateAccess(db, req, companyId, intent);
+      // Rejects a session that is not this user's, is finished, or has expired.
+      const state = await localLogin.check(companyId, userId, intent, sessionId);
+      if (state.status === "expired") throw unprocessable("This sign-in attempt expired. Start sign-in again.");
+      if (intent.provider !== "anthropic" && intent.provider !== "openai" && intent.provider !== "xai")
+        throw unprocessable("This provider does not use a local sign-in.");
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await beginBrowserLogin({ sessionId, provider: intent.provider }));
+    });
+  router.post("/companies/:companyId/ai-connections/local/attempts/:sessionId/code",
+    validate(browserLoginCodeSchema), async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const sessionId = z.string().uuid().parse(req.params.sessionId);
+      const { code, ...intent } = browserLoginCodeSchema.parse(req.body);
+      assertLocalLoginAvailable();
+      const userId = await assertAiConnectionCreateAccess(db, req, companyId, intent);
+      const state = await localLogin.check(companyId, userId, intent, sessionId);
+      if (state.status === "expired") throw unprocessable("This sign-in attempt expired. Start sign-in again.");
+      res.setHeader("Cache-Control", "no-store");
+      res.json(await submitBrowserLoginCode({ sessionId, code }));
+    });
   router.delete("/companies/:companyId/ai-connections/local/attempts/:sessionId", async (req, res) => {
     assertBoard(req);
     assertCompanyAccess(req, req.params.companyId as string);
     const id = z.string().uuid().parse(req.params.sessionId);
+    cancelBrowserLogin(id); // magmarta fork policy (g): kill any CLI still holding this attempt
     await localLogin.cancel(req.params.companyId as string, getActorInfo(req).actorId, id);
     res.json({ ok: true });
   });

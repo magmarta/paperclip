@@ -28,6 +28,7 @@ One patch is not a privacy change but an operability one:
 | | Change | Where |
 |---|---|---|
 | **f** | `*.suffix` wildcards in `PAPERCLIP_ALLOWED_HOSTNAMES` | `server/src/middleware/private-hostname-guard.ts` |
+| **g** | Browser-driven local model sign-in | `server/src/services/browser-ai-login.ts`, `ui/src/components/ai-connections/BrowserSignIn.tsx` (+ small hooks into `server/src/routes/ai-connections.ts`, `ui/src/api/ai-connections.ts`, `ui/src/components/ai-connections/useLocalAiLogin.ts`, `ui/src/components/AdapterLoginChrome.tsx`) |
 
 Notes on each:
 
@@ -69,6 +70,31 @@ name under a wildcarded suffix now reaches the instance. It is a deliberate
 trade for a private network whose DNS the operator controls. Pass
 `--allowed-hostnames` to `scripts/magmarta-install.sh` to narrow or replace the
 defaults (`*.c-prot.local,*.marta.tr`).
+
+### (g) Browser sign-in for local subscriptions
+
+Upstream's local-subscription flow prints a shell command and expects the
+operator to run the provider CLI in a terminal on the host. That assumes shell
+access to the server. Worse, on several SSH clients it is a dead end: the CLI's
+device-code prompt is a full-screen TUI and those clients deliver neither
+right-click nor Ctrl+Shift+V into it, so the code cannot be entered at all.
+Operators who reached for a root shell instead left the credential files owned
+by root, and the only symptom was `Internal server error`.
+
+The CLI does not need a TTY — with stdin on a pipe it prints the authorization
+URL and reads the code as a line. So the server runs it, hands the URL to the
+browser, and writes the pasted code back into the child's stdin. Two endpoints
+under the existing attempt (`.../attempts/:sessionId/spawn` and `/code`) carry
+it, both behind the same authorization the other local endpoints use. The child
+inherits the service user, so credentials land with correct ownership by
+construction.
+
+The terminal command is still shown underneath for anyone who prefers it, and
+`scripts/magmarta-install.sh` still installs `paperclip-login` for hosts where
+the browser cannot reach the instance.
+
+Most of this lives in two fork-only files, so merges stay clean; the hooks into
+upstream files are a few lines each.
 
 ## What is deliberately **not** disabled
 
