@@ -30,6 +30,7 @@ One patch is not a privacy change but an operability one:
 | | Change | Where |
 |---|---|---|
 | **f** | `*.suffix` wildcards in `PAPERCLIP_ALLOWED_HOSTNAMES` | `server/src/middleware/private-hostname-guard.ts` |
+| **h** | Surface the provider's own failure text on a failed run | `patches/acpx@0.13.1.patch` |
 | **g** | Browser-driven local model sign-in | `server/src/services/browser-ai-login.ts`, `ui/src/components/ai-connections/BrowserSignIn.tsx` (+ small hooks into `server/src/routes/ai-connections.ts`, `ui/src/api/ai-connections.ts`, `ui/src/components/ai-connections/useLocalAiLogin.ts`, `ui/src/components/AdapterLoginChrome.tsx`) |
 
 Notes on each:
@@ -97,6 +98,30 @@ the browser cannot reach the instance.
 
 Most of this lives in two fork-only files, so merges stay clean; the hooks into
 upstream files are a few lines each.
+
+### (h) The provider's failure text
+
+ACPX collapses a failed turn into a category and throws
+`ACP agent reported a terminal ${category} failure.` The underlying
+`sessionFailure` carries a `title`, optional `details` and suggested `actions`
+— all of it discarded.
+
+Those five categories are too coarse to act on. `limit` alone covers
+`quota_exhausted`, `rate_limited`, `budget_exhausted` and `context_exhausted`:
+one means wait, one means the account is out, one means start a new session.
+Worse, `access` renders as "terminal access failure", which reads like a shell
+or permissions problem and sent us debugging file ownership for hours when the
+real cause was an unfinished sign-in.
+
+The patch appends the title, details and suggested actions to the thrown
+message, so the run log carries the provider's own words. It extends the
+existing acpx patch rather than adding a new mechanism, and keeps the original
+sentence as the prefix so anything matching on it still matches.
+
+Note the repo patches two acpx majors; the runner resolves **0.13.1**, so that
+is the one to patch. `pnpm patch-commit` rewrites `pnpm-lock.yaml` with a new
+`patch_hash`, and both files must be committed together or
+`pnpm install --frozen-lockfile` fails on every other host.
 
 ## What is deliberately **not** disabled
 
