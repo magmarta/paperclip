@@ -23,6 +23,7 @@ import path from "node:path";
 import { z } from "zod";
 import { localAiConnectionSchema } from "@paperclipai/shared";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
+import { readVerifiedLocalAiCredential } from "./local-ai-credentials.js";
 import { unprocessable } from "../errors.js";
 
 /** Mirrors `loginHome` in local-ai-login.ts. Duplicated rather than exported
@@ -163,12 +164,19 @@ export async function beginBrowserLogin(input: {
 }
 
 /**
- * Feeds the operator's code to the waiting CLI and waits for it to finish.
- * Credential verification stays with the existing `check` endpoint — this only
- * reports whether the CLI accepted the code.
+ * Feeds the operator's code to the waiting CLI, waits for it to finish, and
+ * only reports success once a usable credential is actually on disk.
+ *
+ * The exit code alone is not enough. A sign-in that ends without writing
+ * credentials still exits cleanly, and reporting that as success is how an
+ * unusable connection gets saved: the operator sees "signed in", presses
+ * Connect, and every later run dies with the provider's auth_required — which
+ * surfaces far away from here, as a bare "terminal access failure" on the
+ * agent run, with nothing pointing back at the sign-in.
  */
 export async function submitBrowserLoginCode(input: {
   sessionId: string;
+  provider: BrowserLoginProvider;
   code: string;
 }): Promise<{ ok: boolean; detail: string }> {
   const entry = pending.get(input.sessionId);
@@ -187,7 +195,28 @@ export async function submitBrowserLoginCode(input: {
   }
 
   const detail = entry.output.slice(before).trim().slice(0, 500);
-  const ok = entry.exited && entry.exitCode === 0;
+  const exitedCleanly = entry.exited && entry.exitCode === 0;
   if (entry.exited) cancelBrowserLogin(input.sessionId);
-  return { ok, detail };
+
+  if (!exitedCleanly) {
+    return {
+      ok: false,
+      detail: detail || "The sign-in did not complete. Start sign-in again for a fresh link.",
+    };
+  }
+
+  // The same check the connect path runs, so "signed in" here and a working
+  // Connect cannot disagree.
+  try {
+    await readVerifiedLocalAiCredential(
+      input.provider === "anthropic" ? "anthropic" : input.provider === "openai" ? "openai" : "xai",
+      browserLoginHome(input.sessionId),
+    );
+  } catch {
+    return {
+      ok: false,
+      detail: "The sign-in finished but left no usable credential. Start sign-in again.",
+    };
+  }
+  return { ok: true, detail };
 }

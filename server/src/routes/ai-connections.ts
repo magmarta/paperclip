@@ -229,7 +229,9 @@ export function aiConnectionRoutes(db: Db, options: Parameters<typeof supportsLo
       const state = await localLogin.check(companyId, userId, intent, sessionId);
       if (state.status === "expired") throw unprocessable("This sign-in attempt expired. Start sign-in again.");
       res.setHeader("Cache-Control", "no-store");
-      res.json(await submitBrowserLoginCode({ sessionId, code }));
+      if (intent.provider !== "anthropic" && intent.provider !== "openai" && intent.provider !== "xai")
+        throw unprocessable("This provider does not use a local sign-in.");
+      res.json(await submitBrowserLoginCode({ sessionId, provider: intent.provider, code }));
     });
   router.delete("/companies/:companyId/ai-connections/local/attempts/:sessionId", async (req, res) => {
     assertBoard(req);
