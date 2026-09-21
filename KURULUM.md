@@ -55,6 +55,7 @@ Bittiğinde erişim adresini, veri dizinini ve servis komutlarını ekrana yazar
 | `--mode MOD` | `authenticated` | `authenticated` \| `local_trusted` |
 | `--telemetry on\|off` | `off` | Birinci-taraf telemetri |
 | `--allowed-hostnames L` | `*.c-prot.local,*.marta.tr` | Ek hostname listesi, wildcard kabul eder |
+| `--allowed-signup-emails L` | _(boş)_ | Hesap açabilecek e-postalar; boş = kısıtlama yok |
 | `--no-docker` | — | Docker Engine kurma |
 | `--no-agent-clis` | — | Ajan CLI'larını kurma |
 | `--update` | — | Sadece güncelle (aşağıya bakın) |
@@ -119,7 +120,32 @@ paperclip-login --cancel       # bekleyen girişi iptal eder
 > verir. Yukarıdaki iki yol da bunu yapısal olarak engeller; olmuşsa servisi
 > yeniden başlatmak (`systemctl restart paperclip`) sahipliği onarır.
 
-### 3. Alan adıyla erişim
+### 3. Kimler hesap açabilir
+
+İnternete açık bir panelde kayıt varsayılan olarak **herkese** açıktır. Yalnızca
+belirli adreslerin hesap açabilmesi için allowlist'i doldurun:
+
+```sh
+paperclip-allow-email list
+paperclip-allow-email add 'hasan@marta.tr'
+paperclip-allow-email add '*@martateknoloji.com.tr'   # tüm alan adı
+paperclip-allow-email remove hasan@marta.tr
+paperclip-allow-email clear                            # kısıtlamayı kaldır
+```
+
+Komut hem `/etc/paperclip-install.conf` hem `/etc/paperclip.env` dosyasını
+günceller ve servisi yeniden başlatır. Listede olmayan bir adresle kayıt
+denemesi `403 SIGNUP_EMAIL_NOT_ALLOWED` döner.
+
+`*@marta.tr` → `a@marta.tr` geçer; `a@alt.marta.tr` ve `a@sahte-marta.tr`
+geçmez. Alt alan adını ayrıca ekleyin.
+
+> Davet akışı kayıt gerektirir: davetli kişi önce hesap açar, sonra daveti
+> kabul eder. Bu yüzden `PAPERCLIP_AUTH_DISABLE_SIGN_UP=true` kullanmayın —
+> davetlileri de kilitler. Doğru araç bu allowlist'tir.
+> Gerekçe: [`.github/FORK-POLICY.md`](.github/FORK-POLICY.md) **(i)**.
+
+### 4. Alan adıyla erişim
 
 `PAPERCLIP_ALLOWED_HOSTNAMES` listesinde olmayan bir hostname `403 This
 hostname is not allowed` döner. Liste `/etc/paperclip.env` içindedir ve
@@ -174,9 +200,11 @@ journalctl -u paperclip -f
 | Dosya | İçerik |
 |---|---|
 | `/etc/paperclip.env` | Tüm ortam ayarları ve secret'lar (mod `640`, `root:paperclip`) |
+| `/etc/paperclip-install.conf` | Kurulum seçenekleri; `--update` bunları korur (mod `600`) |
 | `/etc/systemd/system/paperclip.service` | Unit dosyası |
 | `/var/lib/paperclip` | Veritabanı, workspace'ler, yüklemeler, model kimlikleri |
 | `/usr/local/bin/paperclip-login` | Model giriş yardımcısı |
+| `/usr/local/bin/paperclip-allow-email` | Kayıt allowlist'i yönetimi |
 | `/usr/local/bin/paperclip-repair-perms` | Her serviste izin onarımı (`ExecStartPre`) |
 
 ### Yedekleme

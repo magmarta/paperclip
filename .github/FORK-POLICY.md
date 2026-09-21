@@ -31,6 +31,7 @@ One patch is not a privacy change but an operability one:
 |---|---|---|
 | **f** | `*.suffix` wildcards in `PAPERCLIP_ALLOWED_HOSTNAMES` | `server/src/middleware/private-hostname-guard.ts` |
 | **h** | Surface the provider's own failure text on a failed run | `patches/acpx@0.13.1.patch` |
+| **i** | Registration allowlist: only listed addresses may open an account | `server/src/middleware/signup-email-allowlist.ts` (+ `server/src/config.ts`, `server/src/app.ts`, `server/src/index.ts`, `packages/shared/src/config-schema.ts`) |
 | **g** | Browser-driven local model sign-in | `server/src/services/browser-ai-login.ts`, `ui/src/components/ai-connections/BrowserSignIn.tsx` (+ small hooks into `server/src/routes/ai-connections.ts`, `ui/src/api/ai-connections.ts`, `ui/src/components/ai-connections/useLocalAiLogin.ts`, `ui/src/components/AdapterLoginChrome.tsx`) |
 
 Notes on each:
@@ -73,6 +74,38 @@ name under a wildcarded suffix now reaches the instance. It is a deliberate
 trade for a private network whose DNS the operator controls. Pass
 `--allowed-hostnames` to `scripts/magmarta-install.sh` to narrow or replace the
 defaults (`*.c-prot.local,*.marta.tr`).
+
+### (i) Registration allowlist
+
+An instance reachable from the public internet accepts a sign-up from anyone
+who can load the page. Upstream's only lever is `disableSignUp`, and it does
+not express "invited people only" here: `routes/access.ts` rejects an anonymous
+invite acceptance with *"Human invite acceptance requires authenticated user"*,
+so an invitee must register **before** the invite can be redeemed. Turning
+sign-up off therefore locks out exactly the people an invite was issued to.
+
+`PAPERCLIP_AUTH_ALLOWED_SIGNUP_EMAILS` closes the gap. A middleware mounted
+ahead of the Better Auth handler rejects `POST /api/auth/sign-up/email` with
+`403 SIGNUP_EMAIL_NOT_ALLOWED` when the address is not listed. Every other auth
+path — sign-in, sign-out, session — passes through untouched: this is a
+registration gate, not an access gate.
+
+Entries are a full address (`hasan@marta.tr`) or a domain wildcard
+(`*@marta.tr`). The wildcard match mirrors **(f)**: the `@` is part of the
+compared suffix, so `*@marta.tr` accepts `a@marta.tr` but rejects
+`a@evil-marta.tr` and `a@sub.marta.tr` — list a subdomain explicitly if you
+need it.
+
+An empty or unset list means **no restriction**, preserving upstream behaviour
+exactly. That default is deliberate: a typo that empties the variable must not
+lock an instance out of onboarding, and a host that never sets it is
+unaffected by this patch. The trade is that the safe-by-default direction is
+"open", so the setting has to be applied consciously — `scripts/magmarta-install.sh`
+therefore prints the effective value in its closing summary.
+
+Manage it with `paperclip-allow-email` (`list` / `add` / `remove` / `clear`),
+which writes both `/etc/paperclip-install.conf` and `/etc/paperclip.env` and
+restarts the service.
 
 ### (g) Browser sign-in for local subscriptions
 

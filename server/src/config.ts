@@ -67,6 +67,7 @@ export interface Config {
   authPublicBaseUrl: string | undefined;
   chatWebhookPublicBaseUrl: string | undefined;
   authDisableSignUp: boolean;
+  authAllowedSignUpEmails: string[];
   databaseMode: DatabaseMode;
   databaseUrl: string | undefined;
   databaseMigrationUrl: string | undefined;
@@ -227,6 +228,18 @@ export function loadConfig(): Config {
     disableSignUpFromEnv !== undefined
       ? disableSignUpFromEnv === "true"
       : (fileConfig?.auth?.disableSignUp ?? false);
+  // magmarta fork policy (i): registration allowlist. Empty/unset keeps
+  // upstream behaviour (anyone may register). See
+  // server/src/middleware/signup-email-allowlist.ts and .github/FORK-POLICY.md.
+  const allowedSignUpEmailsFromEnvRaw =
+    process.env.PAPERCLIP_AUTH_ALLOWED_SIGNUP_EMAILS;
+  const authAllowedSignUpEmails: string[] = (
+    allowedSignUpEmailsFromEnvRaw !== undefined
+      ? allowedSignUpEmailsFromEnvRaw.split(",")
+      : (fileConfig?.auth?.allowedSignUpEmails ?? [])
+  )
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
   const allowedHostnamesFromEnvRaw = process.env.PAPERCLIP_ALLOWED_HOSTNAMES;
   const allowedHostnamesFromEnv = allowedHostnamesFromEnvRaw
     ? allowedHostnamesFromEnvRaw
@@ -328,6 +341,7 @@ export function loadConfig(): Config {
       process.env.PAPERCLIP_CHAT_WEBHOOK_PUBLIC_URL,
     ),
     authDisableSignUp,
+    authAllowedSignUpEmails,
     databaseMode: fileDatabaseMode,
     databaseUrl: process.env.DATABASE_URL ?? fileDbUrl,
     databaseMigrationUrl: process.env.DATABASE_MIGRATION_URL,

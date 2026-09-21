@@ -917,6 +917,9 @@ async function startServerWithDatabaseTeardown(
     announcements: { enabled: config.announcementsEnabled, feedUrl: config.announcementsFeedUrl },
     pluginMigrationDb: pluginMigrationDb as any,
     betterAuthHandler,
+    // magmarta fork policy (i): registration allowlist, see
+    // server/src/middleware/signup-email-allowlist.ts.
+    authAllowedSignUpEmails: config.authAllowedSignUpEmails,
     resolveSession,
     pluginWorkerManager,
     decisionServiceOptions,

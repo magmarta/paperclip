@@ -18,6 +18,22 @@
 set -euo pipefail
 
 # ─────────────────────────── Ayarlar ───────────────────────────
+# Operator ayarlari. --update calistirildiginda bayrak verilmedigi icin
+# /etc/paperclip.env yeniden uretilirken alan adi ve hostname listesi
+# varsayilanlara donuyordu; bu dosya o ayarlari kalici kilar.
+# Oncelik: komut satiri bayragi > ortam degiskeni > bu dosya > varsayilan.
+CONF_FILE="${PAPERCLIP_CONF_FILE:-/etc/paperclip-install.conf}"
+if [ -f "$CONF_FILE" ]; then
+  while IFS='=' read -r _k _v; do
+    case "$_k" in PAPERCLIP_*) ;; *) continue ;; esac
+    # Ortamda zaten verilmisse dosya onu ezmez.
+    eval "_cur=\${$_k+set}"
+    [ "${_cur:-}" = set ] || export "$_k=$_v"
+    unset _cur
+  done < "$CONF_FILE"
+  unset _k _v
+fi
+
 REPO_URL="${PAPERCLIP_REPO_URL:-https://github.com/magmarta/paperclip.git}"
 UPSTREAM_URL="${PAPERCLIP_UPSTREAM_URL:-https://github.com/paperclipai/paperclip.git}"
 REF="${PAPERCLIP_REF:-master}"
@@ -35,6 +51,9 @@ INSTALL_DOCKER="${PAPERCLIP_INSTALL_DOCKER:-1}"   # ajan izolasyonu / sandbox sa
 # eder (apex haric). Fork yamasi (f) bunu hem hostname guard'inda hem de
 # Better Auth trustedOrigins tarafinda calistirir.
 ALLOWED_HOSTNAMES="${PAPERCLIP_ALLOWED_HOSTNAMES:-*.c-prot.local,*.marta.tr}"
+# Hesap acmasina izin verilen e-posta adresleri. Bos = kisitlama yok.
+# Tam adres (hasan@marta.tr) veya alan adi joker karakteri (*@marta.tr).
+ALLOWED_SIGNUP_EMAILS="${PAPERCLIP_AUTH_ALLOWED_SIGNUP_EMAILS:-}"
 UPDATE_ONLY="${PAPERCLIP_UPDATE_ONLY:-0}"
 
 RUSTUP_VERSION=1.29.0
@@ -57,6 +76,8 @@ Kullanim: install-paperclip.sh [secenekler]
   --no-docker          Docker Engine kurma (varsayilan: kurulur)
   --allowed-hostnames L Virgullu ek hostname listesi; "*.ornek.local" wildcard
                        kabul eder (varsayilan: *.c-prot.local,*.marta.tr)
+  --allowed-signup-emails L  Hesap acabilecek e-postalar; virgullu.
+                       Tam adres veya "*@alanadi" joker. Bos = kisitlama yok.
   --update             Sadece guncelle: git pull + yeniden derle + servisi yeniden baslat
   -h, --help           Bu yardim
 
@@ -80,6 +101,7 @@ while [ $# -gt 0 ]; do
     --no-agent-clis) INSTALL_AGENT_CLIS=0; shift ;;
     --no-docker) INSTALL_DOCKER=0; shift ;;
     --allowed-hostnames) ALLOWED_HOSTNAMES="$2"; shift 2 ;;
+    --allowed-signup-emails) ALLOWED_SIGNUP_EMAILS="$2"; shift 2 ;;
     --update) UPDATE_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Bilinmeyen secenek: $1" >&2; usage; exit 1 ;;
@@ -255,6 +277,7 @@ PAPERCLIP_DEPLOYMENT_MODE=$DEPLOYMENT_MODE
 PAPERCLIP_DEPLOYMENT_EXPOSURE=$DEPLOYMENT_EXPOSURE
 PAPERCLIP_PUBLIC_URL=$PUBLIC_URL
 PAPERCLIP_ALLOWED_HOSTNAMES=$PUBLIC_HOST,$(hostname),localhost,127.0.0.1${ALLOWED_HOSTNAMES:+,$ALLOWED_HOSTNAMES}
+PAPERCLIP_AUTH_ALLOWED_SIGNUP_EMAILS=$ALLOWED_SIGNUP_EMAILS
 BETTER_AUTH_SECRET=$AUTH_SECRET
 PAPERCLIP_TOOL_ACTION_SIGNING_SECRET=$SIGN_SECRET
 OPENCODE_ALLOW_ALL_MODELS=true
@@ -272,6 +295,24 @@ EOF
 } > /etc/paperclip.env
 chown "root:$SERVICE_USER" /etc/paperclip.env
 chmod 640 /etc/paperclip.env
+
+# Operator ayarlarini kalici kil: bir sonraki "--update" bayraksiz calissa da
+# alan adi, hostname listesi ve kayit allowlist'i korunur.
+cat > "$CONF_FILE" <<CONF
+# Paperclip kurulum secenekleri — install-paperclip.sh bunlari okur.
+# Elle duzenleyebilirsiniz; bir sonraki --update ile uygulanir.
+# Komut satiri bayragi ve ortam degiskeni bu dosyayi ezer.
+PAPERCLIP_PUBLIC_URL=$PUBLIC_URL
+PAPERCLIP_PORT=$PORT
+PAPERCLIP_APP_DIR=$APP_DIR
+PAPERCLIP_DATA_DIR=$DATA_DIR
+PAPERCLIP_ALLOWED_HOSTNAMES=$ALLOWED_HOSTNAMES
+PAPERCLIP_AUTH_ALLOWED_SIGNUP_EMAILS=$ALLOWED_SIGNUP_EMAILS
+PAPERCLIP_DEPLOYMENT_MODE=$DEPLOYMENT_MODE
+PAPERCLIP_DEPLOYMENT_EXPOSURE=$DEPLOYMENT_EXPOSURE
+PAPERCLIP_TELEMETRY=$TELEMETRY
+CONF
+chmod 600 "$CONF_FILE"
 
 # ── Yardimci betikler: izin tamiri + model girisi ────────────────
 # Paperclip'in "Connect a model" ekrani operatore host'ta calistirilacak bir
@@ -295,6 +336,94 @@ if [ -n "\$(find "\$DATA_DIR" \\( ! -user "\$SERVICE_USER" -o ! -group "\$SERVIC
 fi
 REPAIR
 chmod 755 /usr/local/bin/paperclip-repair-perms
+
+cat > /usr/local/bin/paperclip-allow-email <<'ALLOW'
+#!/usr/bin/env bash
+# Hesap acmasina izin verilen e-posta adreslerini yonetir.
+#
+#   paperclip-allow-email list
+#   paperclip-allow-email add hasan@marta.tr
+#   paperclip-allow-email add '*@martateknoloji.com.tr'
+#   paperclip-allow-email remove hasan@marta.tr
+#   paperclip-allow-email clear            # kisitlamayi tamamen kaldirir
+#
+# Liste bos oldugunda kisitlama YOKTUR: panele ulasan herkes hesap acabilir.
+# Degisiklik servisi yeniden baslatir (birkac saniye kesinti).
+set -euo pipefail
+
+CONF_FILE=/etc/paperclip-install.conf
+ENV_FILE=/etc/paperclip.env
+KEY=PAPERCLIP_AUTH_ALLOWED_SIGNUP_EMAILS
+
+[ "$(id -u)" -eq 0 ] || { echo "HATA: root olarak calistirin." >&2; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "HATA: $ENV_FILE yok; once kurulumu yapin." >&2; exit 1; }
+
+read_list() { grep -E "^$KEY=" "$CONF_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true; }
+
+write_list() {
+  new="$1"
+  for f in "$CONF_FILE" "$ENV_FILE"; do
+    [ -f "$f" ] || continue
+    if grep -qE "^$KEY=" "$f"; then
+      # Degeri sed ayiraci olarak kullanilmayan bir karakterle degistir.
+      tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+      awk -v k="$KEY" -v v="$new" -F= '
+        $1==k { print k "=" v; found=1; next } { print }
+        END { if (!found) print k "=" v }
+      ' "$f" > "$tmp"
+      cat "$tmp" > "$f"; rm -f "$tmp"; trap - EXIT
+    else
+      printf '%s=%s\n' "$KEY" "$new" >> "$f"
+    fi
+  done
+  echo "Liste guncellendi: ${new:-<bos — kisitlama yok>}"
+  echo "Servis yeniden baslatiliyor..."
+  systemctl restart paperclip
+  systemctl is-active --quiet paperclip && echo "Tamam, servis ayakta." \
+    || { echo "UYARI: servis ayaga kalkmadi, 'journalctl -u paperclip -n 50' bakin." >&2; exit 1; }
+}
+
+CUR="$(read_list)"
+
+case "${1:-list}" in
+  list)
+    if [ -z "$CUR" ]; then
+      echo "Allowlist BOS — panele ulasan herkes hesap acabilir."
+    else
+      echo "Hesap acabilecek adresler:"
+      printf '%s\n' "$CUR" | tr ',' '\n' | sed '/^$/d;s/^/  - /'
+    fi
+    ;;
+  add)
+    E="$(printf '%s' "${2:-}" | tr 'A-Z' 'a-z' | xargs)"
+    [ -n "$E" ] || { echo "Kullanim: paperclip-allow-email add <e-posta|*@alanadi>" >&2; exit 1; }
+    case "$E" in
+      \*@*.*) ;;                       # *@alanadi
+      *@*.*)  ;;                       # tam adres
+      *) echo "HATA: '$E' gecerli bir adres ya da '*@alanadi' degil." >&2; exit 1 ;;
+    esac
+    if printf '%s' ",$CUR," | grep -qF ",$E,"; then
+      echo "Zaten listede: $E"; exit 0
+    fi
+    write_list "${CUR:+$CUR,}$E"
+    ;;
+  remove|rm|del)
+    E="$(printf '%s' "${2:-}" | tr 'A-Z' 'a-z' | xargs)"
+    [ -n "$E" ] || { echo "Kullanim: paperclip-allow-email remove <e-posta>" >&2; exit 1; }
+    printf '%s' ",$CUR," | grep -qF ",$E," || { echo "Listede yok: $E"; exit 0; }
+    NEW="$(printf '%s' "$CUR" | tr ',' '\n' | grep -vxF "$E" | paste -sd, -)"
+    write_list "$NEW"
+    ;;
+  clear)
+    printf 'Allowlist tamamen kaldirilacak; HERKES hesap acabilecek. Emin misiniz? [e/H] '
+    read -r a; case "$a" in e|E) ;; *) echo "Iptal edildi."; exit 0 ;; esac
+    write_list ""
+    ;;
+  -h|--help) sed -n '2,12p' "$0" ;;
+  *) echo "Bilinmeyen komut: $1 (list|add|remove|clear)" >&2; exit 1 ;;
+esac
+ALLOW
+chmod 755 /usr/local/bin/paperclip-allow-email
 
 cat > /usr/local/bin/paperclip-login <<'LOGIN'
 #!/usr/bin/env bash
@@ -548,6 +677,7 @@ cat <<EOF
   Veri        : $DATA_DIR  (gomulu PostgreSQL burada)
   Ortam       : /etc/paperclip.env
   Hostname    : $PUBLIC_HOST, $(hostname), localhost${ALLOWED_HOSTNAMES:+, $ALLOWED_HOSTNAMES}
+  Kayit izni  : ${ALLOWED_SIGNUP_EMAILS:-HERKES (allowlist bos)}
   Telemetri   : $([ "$TELEMETRY" = "on" ] && echo "ACIK" || echo "KAPALI")
   Docker      : $(command -v docker >/dev/null 2>&1 && docker --version 2>/dev/null | cut -d, -f1 || echo "kurulu degil")
 
@@ -556,6 +686,11 @@ cat <<EOF
     paperclip-login codex    # OpenAI Codex
     ("claude auth login" komutunu ELLE root ile calistirmayin; dosyalar root
      sahipli kalir ve baglanti akisi hata verir.)
+
+  Kimler hesap acabilir:
+    paperclip-allow-email list
+    paperclip-allow-email add '*@sirket.com'
+    paperclip-allow-email remove kisi@sirket.com
 
   Servis:
     systemctl status paperclip

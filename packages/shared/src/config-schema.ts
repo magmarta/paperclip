@@ -60,6 +60,9 @@ export const authConfigSchema = z.object({
   baseUrlMode: z.enum(AUTH_BASE_URL_MODES).default("auto"),
   publicBaseUrl: z.string().url().optional(),
   disableSignUp: z.boolean().default(false),
+  // magmarta fork policy (i): addresses allowed to register. Entries are a
+  // full address or a `*@domain` wildcard; an empty list means no restriction.
+  allowedSignUpEmails: z.array(z.string().min(1)).default([]),
 }).passthrough();
 
 export const storageLocalDiskConfigSchema = z.object({
@@ -119,6 +122,7 @@ export const paperclipConfigSchema = z
     auth: authConfigSchema.default({
       baseUrlMode: "auto",
       disableSignUp: false,
+      allowedSignUpEmails: [],
     }),
     storage: storageConfigSchema.default({
       provider: "local_disk",

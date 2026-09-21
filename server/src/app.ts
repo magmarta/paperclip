@@ -22,6 +22,7 @@ import type { StorageService } from "./storage/types.js";
 import { httpLogger, errorHandler } from "./middleware/index.js";
 import { actorMiddleware } from "./middleware/auth.js";
 import { boardMutationGuard } from "./middleware/board-mutation-guard.js";
+import { signUpEmailAllowlistMiddleware } from "./middleware/signup-email-allowlist.js";
 import {
   privateHostnameGuard,
   resolvePrivateHostnameAllowSet,
@@ -484,6 +485,9 @@ export async function createApp(
     pluginWorkerManager?: PluginWorkerManager;
     decisionServiceOptions: DecisionServiceOptions;
     betterAuthHandler?: express.RequestHandler;
+    // magmarta fork policy (i): addresses allowed to register. Empty = no
+    // restriction (upstream behaviour). See .github/FORK-POLICY.md.
+    authAllowedSignUpEmails?: string[];
     resolveSession?: (
       req: ExpressRequest,
     ) => Promise<BetterAuthSessionResult | null>;
@@ -568,6 +572,10 @@ export async function createApp(
   app.use(cloudControlMiddleware());
   app.use("/api/auth", authRoutes(db));
   if (opts.betterAuthHandler) {
+    // magmarta fork policy (i): the registration gate sits ahead of the Better
+    // Auth handler so a disallowed address never reaches the credential store.
+    // Sign-in, sign-out and session paths pass straight through.
+    app.use("/api/auth", signUpEmailAllowlistMiddleware(opts.authAllowedSignUpEmails ?? []));
     app.all("/api/auth/{*authPath}", opts.betterAuthHandler);
   }
   app.use(llmRoutes(db));
