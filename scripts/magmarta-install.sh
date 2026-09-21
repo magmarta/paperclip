@@ -379,8 +379,20 @@ write_list() {
   echo "Liste guncellendi: ${new:-<bos — kisitlama yok>}"
   echo "Servis yeniden baslatiliyor..."
   systemctl restart paperclip
-  systemctl is-active --quiet paperclip && echo "Tamam, servis ayakta." \
-    || { echo "UYARI: servis ayaga kalkmadi, 'journalctl -u paperclip -n 50' bakin." >&2; exit 1; }
+  # systemd "active" dedigi anda HTTP henuz dinlemiyor olabilir (gomulu
+  # PostgreSQL once ayaga kalkiyor). Gercekten cevap verene kadar bekle;
+  # aksi halde komut "tamam" der, hemen ardindan 502 gorulur.
+  port="$(grep -E '^PORT=' "$ENV_FILE" | tail -1 | cut -d= -f2-)"
+  for _ in $(seq 1 60); do
+    if curl -fsS -o /dev/null --max-time 3 "http://127.0.0.1:${port:-3100}/api/health" 2>/dev/null; then
+      echo "Tamam, servis cevap veriyor."
+      return 0
+    fi
+    systemctl is-active --quiet paperclip || break
+    sleep 2
+  done
+  echo "UYARI: servis 2 dakika icinde cevap vermedi; 'journalctl -u paperclip -n 50' bakin." >&2
+  exit 1
 }
 
 CUR="$(read_list)"
