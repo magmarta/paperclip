@@ -140,7 +140,7 @@ if [ "$UPDATE_ONLY" -eq 0 ]; then
   apt-get update -qq
   # gh bazi dagitimlarda yok; ayri deneyip basarisizligi yutuyoruz.
   apt-get install -y -qq \
-    ca-certificates curl wget git jq ripgrep openssh-client \
+    ca-certificates curl wget git jq ripgrep openssh-client sudo \
     gcc g++ make libc6-dev pkg-config xz-utils unzip openssl
   apt-get install -y -qq gh 2>/dev/null || warn "gh (GitHub CLI) paketi bulunamadi, atlandi."
 
@@ -436,6 +436,55 @@ case "${1:-list}" in
 esac
 ALLOW
 chmod 755 /usr/local/bin/paperclip-allow-email
+
+# ── Preview yayinlama araci ────────────────────────────────────
+# Betik depoda duruyor (scripts/paperclip-preview). 340 satirlik bir araci
+# heredoc'a gomersek ne diff'lenebilir ne de ayrica calistirilip test
+# edilebilir; diger yardimcilar kisa oldugu icin onlar gomulu kaldi.
+install -m 755 "$APP_DIR/scripts/paperclip-preview" /usr/local/bin/paperclip-preview
+
+# Ajan preview yayinlayabilsin diye YALNIZCA bu komuta parolasiz sudo.
+# Isim/port dogrulamasi betigin icinde yapiliyor; sudoers tarafinda arguman
+# kisitlamasi denenmedi, cunku oradaki glob kurallari sessizce yanilabiliyor.
+mkdir -p /etc/sudoers.d && chmod 750 /etc/sudoers.d
+grep -q '^@includedir /etc/sudoers.d' /etc/sudoers || echo '@includedir /etc/sudoers.d' >> /etc/sudoers
+printf '%s ALL=(root) NOPASSWD: /usr/local/bin/paperclip-preview\n' "$SERVICE_USER" \
+  > /etc/sudoers.d/paperclip-preview
+chmod 440 /etc/sudoers.d/paperclip-preview
+visudo -c -f /etc/sudoers.d/paperclip-preview >/dev/null 2>&1 || {
+  rm -f /etc/sudoers.d/paperclip-preview
+  warn "sudoers kurali dogrulanamadi, kaldirildi; ajan preview yayinlayamaz."
+}
+
+install -d -m 755 /var/lib/paperclip-preview
+[ -f /var/lib/paperclip-preview/ports.map ] || : > /var/lib/paperclip-preview/ports.map
+
+# Yapilandirma iskeleti. MEVCUT DOSYA KORUNUR: icinde Cloudflare token'i var ve
+# --update her calistiginda yeniden uretilmesi onu silerdi.
+if [ ! -f /etc/paperclip-preview.conf ]; then
+  PREVIEW_ZONE="$(printf '%s' "$PUBLIC_HOST" | sed -E 's/^[^.]+\.//')"
+  PREVIEW_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+  cat > /etc/paperclip-preview.conf <<PREVIEWCONF
+# paperclip-preview yapilandirmasi — mod 600, token burada duruyor.
+# Ajan bu dosyayi okumaz; komutu "sudo paperclip-preview" ile cagirir.
+#
+# CF_API_TOKEN icin gereken Cloudflare yetkileri:
+#   Zone:DNS:Edit, Zone:Zone:Read, Account:Access Apps and Policies:Edit,
+#   Account:Account Settings:Read
+CF_API_TOKEN=
+CF_ZONE=${PREVIEW_ZONE}
+ORIGIN_IP=${PREVIEW_IP}
+PREVIEW_CERT=/etc/ssl/cloudflare/wildcard.${PREVIEW_ZONE}.crt
+PREVIEW_KEY=/etc/ssl/cloudflare/wildcard.${PREVIEW_ZONE}.key
+# Preview adreslerine erisebilecek e-postalar. BOS BIRAKILIRSA Access
+# kurulmaz ve her preview herkese acik olur.
+ACCESS_EMAILS=
+ACCESS_ENABLED=1
+PORT_MIN=3200
+PORT_MAX=3299
+PREVIEWCONF
+  chmod 600 /etc/paperclip-preview.conf
+fi
 
 cat > /usr/local/bin/paperclip-login <<'LOGIN'
 #!/usr/bin/env bash

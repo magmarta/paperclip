@@ -160,6 +160,55 @@ benzer görünen `marta.tr.baska.com` geçmez. Apex'i ayrıca ekle.
 
 Değişiklikten sonra: `systemctl restart paperclip`.
 
+### 5. Projeleri alan adıyla yayınlama (preview)
+
+Ajanların geliştirdiği bir uygulamayı gerçek bir adresten açmak için
+`paperclip-preview` kullanılır. Komut üç şeyi birlikte yönetir: Cloudflare DNS
+kaydı, Cloudflare Access politikası ve nginx vhost'u. Üçünü elle kurmayın —
+elle yazılmış bir vhost ezilir, elle açılmış bir DNS kaydı da silinmez.
+
+```sh
+PORT=$(sudo paperclip-preview port my-app)   # projeye sabit port ayır
+# ... uygulamayı 127.0.0.1:$PORT üzerinde başlat ...
+sudo paperclip-preview add my-app            # yayına al
+
+sudo paperclip-preview add my-app 8080       # zaten çalışan bir portu bağla
+sudo paperclip-preview list                  # hepsi + dinleniyor mu
+sudo paperclip-preview status my-app
+sudo paperclip-preview rm my-app             # DNS + Access + vhost sil
+```
+
+İsim→port haritası kalıcıdır: aynı proje her zaman aynı portu alır. Panelin ve
+veritabanının portları (`3100`, `54329`, …) preview'a bağlanamaz, `asistan`
+gibi altyapı isimleri rezervedir.
+
+**Her preview Cloudflare Access arkasındadır.** Ziyaretçi, istek sunucuya
+ulaşmadan önce izin listesindeki bir e-postayı doğrular. Geliştirme sunucularının
+çoğunda kimlik doğrulama olmadığı, debug uçları ve veritabanı arayüzleri açıkta
+kaldığı için varsayılan budur. İzinli adresler `/etc/paperclip-preview.conf`
+içindeki `ACCESS_EMAILS` listesindedir; liste **boşsa Access kurulmaz ve preview
+herkese açık olur**.
+
+Yapılandırma (mod `600`, Cloudflare token'ı burada durur):
+
+```
+/etc/paperclip-preview.conf
+```
+
+Gereken Cloudflare token yetkileri: `Zone:DNS:Edit`, `Zone:Zone:Read`,
+`Account:Access Apps and Policies:Edit`, `Account:Account Settings:Read`.
+Ayrıca `*.<alanadı>` ve `<alanadı>` kapsayan bir **Origin CA sertifikası**
+gerekir (`PREVIEW_CERT` / `PREVIEW_KEY`).
+
+Ajan bu komutu `sudo` ile çağırabilir (yalnızca bu komut için, parolasız).
+Token'ı görmesi gerekmez.
+
+> **Statik siteler için bunu kullanmayın.** Derleme gerektirmeyen HTML/CSS/JS
+> bir site Cloudflare Workers'a `wrangler deploy` ile çıkılır: sunucu, nginx,
+> port ve sertifika gerekmez, `custom_domain` route'u DNS kaydını kendisi açar.
+> `paperclip-preview` backend'i, dev server'ı ya da Docker servisi olan işler
+> içindir. Ajan tarafındaki anlatımı `publish-preview` skill'inde.
+
 ---
 
 ## Güncelleme
@@ -205,6 +254,9 @@ journalctl -u paperclip -f
 | `/var/lib/paperclip` | Veritabanı, workspace'ler, yüklemeler, model kimlikleri |
 | `/usr/local/bin/paperclip-login` | Model giriş yardımcısı |
 | `/usr/local/bin/paperclip-allow-email` | Kayıt allowlist'i yönetimi |
+| `/usr/local/bin/paperclip-preview` | Preview yayınlama (DNS + Access + nginx) |
+| `/etc/paperclip-preview.conf` | Cloudflare token'ı ve preview ayarları (mod `600`) |
+| `/var/lib/paperclip-preview/ports.map` | Proje→port haritası, kalıcı |
 | `/usr/local/bin/paperclip-repair-perms` | Her serviste izin onarımı (`ExecStartPre`) |
 
 ### Yedekleme
